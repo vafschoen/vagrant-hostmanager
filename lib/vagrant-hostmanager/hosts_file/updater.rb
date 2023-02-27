@@ -54,6 +54,7 @@ module VagrantPlugins
         def update_host
           # copy and modify hosts file on host with Vagrant-managed entries
           file = @global_env.tmp_path.join('hosts.local')
+          wsl_file_win = @global_env.tmp_path.join('win_hosts.local')
 
           if WindowsSupport.windows? || WindowsSupport.wsl?
             # lazily include windows Module
@@ -67,36 +68,45 @@ module VagrantPlugins
                }
                # convert wsl path to windows path
                if file.to_s =~ /\/mnt\/[a-z]\//
-                  win_file = file.to_s.sub(/^\/mnt\/([a-z])\//, '\1:\\').gsub('/', '\\')
+                  file_win = wsl_file_win.to_s.sub(/^\/mnt\/([a-z])\//, '\1:\\').gsub('/', '\\')
                else
-                  win_file = "\\\\wsl\$\\#{ENV['WSL_DISTRO_NAME']}" + file.to_s.gsub('/', '\\')
+                  file_win = "\\\\wsl\$\\#{ENV['WSL_DISTRO_NAME']}" + wsl_file_win.to_s.gsub('/', '\\')
                end
-               win_hosts_location = "#{windir}\\System32\\drivers\\etc\\hosts"
-               hosts_location = "/mnt/" + windir[0].downcase + "/" + windir[3..-1] + "/System32/drivers/etc/hosts"
+               hosts_location_win = "#{windir}\\System32\\drivers\\etc\\hosts"
+
+               wsl_hosts_location_win = "/mnt/" + windir[0].downcase + "/" + windir[3..-1] + "/System32/drivers/etc/hosts"
+               hosts_location = "/etc/hosts"
 
                # add to both, windows host and wsl machine
-               copy_proc = Proc.new {
-                  wsl_copy_file(file, hosts_location, win_file, win_hosts_location)
-                  `[ -w "/etc/hosts" ] && cat "#{file}" > "/etc/hosts" || sudo cp "#{file}" "/etc/hosts"`
-               }
+               copy_proc = Proc.new { `[ -w "/etc/hosts" ] && cat "#{file}" > "/etc/hosts" || sudo cp "#{file}" "/etc/hosts"` }
+               copy_proc_win = Proc.new { wsl_copy_file(wsl_file_win, wsl_hosts_location_win, file_win, hosts_location_win) }
+
+               line_endings = "lf"
             else
                hosts_location = "#{windir}\\System32\\drivers\\etc\\hosts"
                copy_proc = Proc.new { windows_copy_file(file, hosts_location) }
+               line_endings = "crlf"
             end
-            line_endings = "crlf"
           else
             hosts_location = '/etc/hosts'
             copy_proc = Proc.new { `[ -w "#{hosts_location}" ] && cat "#{file}" > "#{hosts_location}" || sudo cp "#{file}" "#{hosts_location}"` }
             line_endings = "lf"
           end
 
-          FileUtils.cp(hosts_location, file)
           if WindowsSupport.wsl?
-             FileUtils.chmod("+w", file)
+             FileUtils.cp(wsl_hosts_location_win, wsl_file_win)
+             FileUtils.chmod("+w", wsl_file_win)
           end
+          FileUtils.cp(hosts_location, file)
 
           if update_file(file, nil, true, line_endings)
             copy_proc.call
+          end
+
+          if WindowsSupport.wsl?
+            if update_file(wsl_file_win, nil, true, "crlf")
+              copy_proc_win.call
+            end
           end
         end
 
